@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION='0.1.5'
+VERSION='0.2.0'
 echo "rapiddisk-on-boot version $VERSION"
 
 ihelp()  {
@@ -77,7 +77,7 @@ centos_end () {
 
 	echo " - Running 'dracut --kver $kernel_version -f'"
 	dracut --kver "$kernel_version" -f
-	echo " - Done under CentOS. A reboot is needed."
+	echo " - Done under CentOS. A reboot may be required."
 
 }
 
@@ -98,9 +98,9 @@ ubuntu_install () {
 		chmod +x "${bootscript_dest}" 2>/dev/null
 	fi
 	if [ ! -f "${subscript_dest_orig}" -o -n "${force}" ] ; then
-		echo " - Copying ${source_dir}/ubuntu/rapiddisk_sub.orig to ${subscript_dest_orig}..."
-		if ! cp -f "${source_dir}/ubuntu/rapiddisk_sub.orig" "${subscript_dest_orig}"; then
-			myerror "could not copy rapiddisk_sub.orig to ${subscript_dest_orig}."
+		echo " - Copying ${source_dir}/ubuntu/rapiddisk_sub to ${subscript_dest_orig}..."
+		if ! cp -f "${source_dir}/ubuntu/rapiddisk_sub" "${subscript_dest_orig}"; then
+			myerror "could not copy rapiddisk_sub to ${subscript_dest_orig}."
 		fi
 		chmod -x "${subscript_dest_orig}" 2>/dev/null
 	fi
@@ -132,7 +132,7 @@ ubuntu_end () {
 		update-initramfs -u -k "$kernel_version"
 		echo ""
 	fi
-	echo " - Done under Ubuntu. A reboot is needed."
+	echo " - Done under Ubuntu. A reboot may be required."
 
 }
 
@@ -347,10 +347,21 @@ elif [ "$os_name" = "ubuntu" ] ; then
 	fi
 	hook_dest="${hooks_dir}/rapiddisk_hook"
 	bootscript_dest="${scripts_dir}/rapiddisk_boot"
-	subscript_dest_orig="${hooks_dir}/rapiddisk_sub.orig"
+	subscript_dest_orig="${hooks_dir}/rapiddisk_sub"
 	cleanscript_dest_orig="${alt_scripts_dir}/rapiddisk_clean"
 	kernel_version_file="rapiddisk_kernel_${kernel_version}"
-	kernel_version_file_dest="${hooks_dir:?}/${kernel_version_file:?}"
+	lastindex=$(ls 2>/dev/null ${hooks_dir:?}/${kernel_version_file}.* | grep -oP '\d+$' | sort -n)
+#	lowerindex="$(echo "$lastindex" | head -1)"
+	lastindex="$(echo "$lastindex" | tail -n 1)"
+#	if [ -n "$lowerindex" ] && [ "$lowerindex" -gt 0 ] ; then
+#		lastindex="$((lowerindex - 1))"
+	if [ -n "$lastindex" ] ; then
+		lastindex="$((lastindex + 1))"
+		lastindex="$(printf "%03d" $lastindex)"
+	else
+		lastindex="$(printf "%03d" 0)"
+	fi
+	kernel_version_file_dest="${hooks_dir:?}/${kernel_version_file}.${lastindex:?}"
 	# what should we do?
 	if [ "$install_mode" = "simple_install" ] ; then
 		# installing on Ubuntu
@@ -372,23 +383,52 @@ elif [ "$os_name" = "ubuntu" ] ; then
 				myerror "no rapiddisk modules found for chosen kernel."
 			fi
 		fi
-		if [ -z "$force" ] ; then
-			if [ -f "${kernel_version_file_dest}" ] ; then
-				myerror "the config file for kernel version ${kernel_version} is already installed. Use '--force' to reinstall it."
-			fi
-		fi
+#		if [ -z "$force" ] ; then
+#			if [ -f "${kernel_version_file_dest}" ] ; then
+#				myerror "the config file for kernel version ${kernel_version} is already installed. Use '--force' to reinstall it."
+#			fi
+#		fi
 		# now we can perform some parameters' checks which would be senseless to do earlier
 		install_options_checks
 		# calls install function
 		ubuntu_install
 	elif [ "$install_mode" = "simple_uninstall" ] ; then
-		if [ -z "$force" ] ; then
-			if [ ! -f "${kernel_version_file_dest}" ] ; then
-				myerror "it seems there is not a valid installation for kernel version ${kernel_version}. You should use the '--force' option."
+		while [ "$n" != "q" ] ; do
+			numbers=""
+			installations="$(ls 2>/dev/null ${hooks_dir:?}/${kernel_version_file}.* | sort -n)"
+			if [ -n "$installations" ] ; then
+				echo " - I found this mappings for this kernel version:"
+				for i in $installations ; do
+					number="$(echo "$i" | grep -oP '\d+$')"
+					numbers="$numbers $number"
+					size="$(head -n 1 "$i")"
+					device="$(head -n 2 "$i" | tail -n 1)"
+					cache_mode="$(tail -n 1 "$i")"
+					echo "  [$number] Ramdisk size: $size, Device: $device, Cache mode: $cache_mode"
+				done
+
+				echo " - Please enter the number of a mapping to be removed (three digits), 'q' when done:"
+				read -r n
+				if is_num $n && echo $numbers | grep -P '\b'$n'\b' >/dev/null ; then
+					skipinitramfs=false
+					rm -f ${hooks_dir:?}/${kernel_version_file}.$n
+#					numbers="$(echo $numbers | sed "s/\b$n\b//g")"
+				fi
+			else
+				echo " - No (more) cache mappings present for this kernel"
+				break
 			fi
+		done
+		if [ "$skipinitramfs" != "false" -a -z "$noinitramfs" ] ; then
+			noinitramfs=1
 		fi
-		echo " - Uninstalling for kernel $kernel_version..."
-		rm -f "${kernel_version_file_dest}" 2>/dev/null
+#		if [ -z "$force" ] ; then
+#			if [ ! -f "${kernel_version_file_dest}" ] ; then
+#				myerror "it seems there is not a valid installation for kernel version ${kernel_version}. You should use the '--force' option."
+#			fi
+#		fi
+#		echo " - Uninstalling for kernel $kernel_version..."
+#		rm -f "${kernel_version_file_dest}" 2>/dev/null
 	elif [ "$install_mode" = "global_uninstall" ] ; then
 		echo " - Global uninstalling for all kernel versions.."
 		echo " - Deleting all files and rebuilding all the initrd files.."

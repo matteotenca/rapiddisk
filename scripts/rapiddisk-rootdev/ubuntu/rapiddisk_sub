@@ -1,0 +1,29 @@
+#!/bin/sh
+
+. /scripts/functions
+
+log_begin_msg "rapiddisk: starting rapiddisk caches preparation"
+if [ -f /sbin/rapiddisk_sub.inc ] ; then
+	modprobe -q rapiddisk
+	modprobe -q rapiddisk-cache
+	if [ ! -d /sys/module/rapiddisk -o ! -d /sys/module/rapiddisk_cache ] ; then
+		log_failure_msg "rapiddisk: unable to load rapiddisk modules"
+		log_end_msg "rapiddisk: exiting..."
+		exit 0;
+	fi
+	if grep -q '\-p wb' /sbin/rapiddisk_sub.inc ; then
+		modprobe -q dm_writecache
+		if [ ! -d /sys/module/dm_writecache ] ; then
+			log_failure_msg "rapiddisk: unable to load dm-writecache module"
+			log_end_msg "rapiddisk: exiting..."
+			exit 0
+		fi
+	fi
+	. /sbin/rapiddisk_sub.inc
+	result="$(rapiddisk 2>&1 -l)"
+	log_success_msg "$result"
+	log_end_msg "rapiddisk: ramdisk attached and mapping created successfully."
+else
+	log_end_msg "rapiddisk: nothing to do."
+fi
+exit 0

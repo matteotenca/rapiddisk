@@ -15,7 +15,9 @@ esac
 . /scripts/functions
 
 # Begin real processing below this line
-
+if [ ! -x /sbin/rapiddisk ] ; then
+	exit 0
+fi
 cache="$(rapiddisk -l)"
 ramdisks="$(echo $cache | grep -oE 'RapidDisk Device +[[:digit:]]+: +[^ ]+'|grep -oE '[^ ]+$')"
 mapped="$(echo $cache | grep -oE 'Cache: +[^ ]+'| grep -oE '[^ ]+$')"
@@ -27,7 +29,7 @@ for map in $mapped ; do
 	done
 done
 for rmv in $tokeep ; do
-	ramdisks="$(echo $ramdisks | sed "s/$rmv//g")"
+	ramdisks="$(echo $ramdisks | sed "s/\b$rmv\b//g")"
 done
 
 for remove in $ramdisks ; do
@@ -38,4 +40,3 @@ for remove in $ramdisks ; do
 	fi
 done
 exit 0
-
