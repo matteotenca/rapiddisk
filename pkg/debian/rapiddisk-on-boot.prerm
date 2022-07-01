@@ -10,8 +10,9 @@ case "$1" in
 		installations="$(for k in "$(ls 2>/dev/null /usr/share/initramfs-tools/hooks/rapiddisk_kernel* | grep -oP 'kernel_.*$' | sed 's/kernel_//')" ; do echo "$k"; done)"
 		for inst in $installations ; do
 			current_file="${hooks_dir:?}/rapiddisk_kernel_${inst}"
+			kernel_version=$(echo $inst | sed -r 's/\.[[:digit:]]+$//')
 			file="$file ${current_file}"
-			kernel="$kernel $inst"
+			kernel="$kernel $kernel_version"
 			size="$size $(head -n 1 "$current_file")"
 			device="$device $(head -n 2 "$current_file" | tail -n 1)"
 			cache_mode="$cache_mode $(tail -n 1 "$current_file")"
@@ -33,4 +34,3 @@ case "$1" in
 		;;
 esac
 exit 0
-
