@@ -1,0 +1,42 @@
+#!/bin/sh
+PREREQ=""
+prereqs()
+{
+        echo "$PREREQ"
+}
+
+case $1 in
+        prereqs)
+                prereqs
+                exit 0
+                ;;
+esac
+
+. /scripts/functions
+
+# Begin real processing below this line
+if [ ! -x /sbin/rapiddisk ] ; then
+	exit 0
+fi
+cache="$(rapiddisk -l)"
+ramdisks="$(echo $cache | grep -oE 'RapidDisk Device +[[:digit:]]+: +[^ ]+'|grep -oE '[^ ]+$')"
+mapped="$(echo $cache | grep -oE 'Cache: +[^ ]+'| grep -oE '[^ ]+$')"
+for map in $mapped ; do
+	for rd in $ramdisks ; do
+		if [ $map = $rd ]; then
+			tokeep="$tokeep $rd"
+		fi
+	done
+done
+for rmv in $tokeep ; do
+	ramdisks="$(echo $ramdisks | sed "s/\b$rmv\b//g")"
+done
+
+for remove in $ramdisks ; do
+	if rapiddisk 2>&1 -d $remove ; then
+		log_warning_msg "rapiddisk: deleted $remove ramdisk"
+	else
+		log_warning_msg "rapiddisk: failed to delete $remove ramdisk"
+	fi
+done
+exit 0

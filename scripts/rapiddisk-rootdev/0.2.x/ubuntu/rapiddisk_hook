@@ -1,0 +1,48 @@
+#!/bin/sh
+PREREQ=""
+prereqs()
+{
+	echo "$PREREQ"
+}
+
+case $1 in
+	prereqs)
+		prereqs
+		exit 0
+		;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+# Begin real processing below this line
+#cwd="$(dirname "$0")"
+source_dir=/etc/rapiddisk-on-boot
+tmpdir=/tmp
+index=0
+
+if [ -f "${tmpdir}/rapiddisk_sub.inc" ] ; then
+	rm -f "${tmpdir}/rapiddisk_sub.inc"
+fi
+for i in $(ls 2>/dev/null $source_dir/rapiddisk_kernel_${version}.* | sort -n) ; do
+	size="$(head -n 1 "$i")"
+	device="$(head -n 2 "$i" | tail -n 1)"
+	cache_mode="$(tail -n 1 "$i")"
+	if [ "$cache_mode" = "wb" ] ; then writeback=1 ; fi
+	echo "/sbin/rapiddisk >/dev/null 2>&1 -a $size" | tee -a "${tmpdir}/rapiddisk_sub.inc" >/dev/null
+	echo "/sbin/rapiddisk >/dev/null 2>&1 -m rd${index} -b $device -p ${cache_mode}" | tee -a "${tmpdir}/rapiddisk_sub.inc" >/dev/null
+	index="$((index + 1))"
+done
+if [ -f "${tmpdir}/rapiddisk_sub.inc" ] ; then
+	manual_add_modules rapiddisk
+	manual_add_modules rapiddisk-cache
+	if [ -n "$writeback" ] ; then
+		manual_add_modules dm-writecache
+	fi
+	copy_exec /sbin/rapiddisk /sbin/rapiddisk
+	copy_file binary "${tmpdir}/rapiddisk_sub.inc" /sbin/
+	rm -f "${tmpdir}/rapiddisk_sub.inc"
+	chmod +x "${source_dir}/ubuntu/rapiddisk_sub"
+	copy_file binary "${source_dir}/ubuntu/rapiddisk_sub" /sbin/rapiddisk_sub
+	chmod -x "${source_dir}/ubuntu/rapiddisk_sub"
+fi
+
+exit 0

@@ -1,0 +1,381 @@
+#!/bin/bash
+
+VERSION='0.2.0'
+echo "$(basename "$0") v$VERSION"
+
+ihelp()  {
+
+	echo "Usage:"
+	echo "$(basename "$0") --help"
+	echo "$(basename "$0") --install --root=<root_partition> --size=<ramdisk_size> --kernel=<kernel_version> --cache-mode=<cache_mode> [--force]"
+	echo "$(basename "$0") --uninstall --kernel=<kernel_version> [--force]"
+	echo "$(basename "$0") --global-uninstall"
+	echo ""
+	echo "Where:"
+	echo ""
+	echo "--help           prints this help and exit"
+	echo ""
+	echo "In '--install' mode:"
+	echo "<root_partition> is the device mounted as '/' as in /etc/fstab, in the /dev/xxxn format"
+	echo "                 if not provided, /etc/fstab will be parsed to determine it automatically"
+	echo "                 and you'll be asked to confirm"
+	echo "<ramdisk_size>   is the size in MB of the ramdisk to be used as cache"
+	echo "<kernel_version> is needed to determine which initrd file to alter"
+	echo "<cache_mode>     is the rapiddisk caching mode (wt, wa, wb)"
+	echo "--force          even if everything is already in place, force reinstalling."
+	echo "                 Can be useful to change the ramdisk size without perform an uninstall"
+	echo ""
+	echo "In '--uninstall' mode:"
+	echo "<kernel_version> is needed to determine which initrd file to alter. Other initrd files are left intact"
+	echo "--force          perform the uninstall actions even if there is nothing to remove"
+	echo ""
+	echo "In '--global-uninstall' mode:"
+	echo "                 everything ever installed by the script will be removed once and for all"
+	echo "                 all the initrd files will be rebuild"
+	echo ""
+	echo "Note: kernel_version is really important: if you end up with a system that"
+	echo "cannot boot, you can choose another kernel version from the grub menu,"
+	echo "boot successfully, and use the --uninstall command with the <kernel_version> of"
+	echo "the non-booting kernel to create a working initrd file."
+	echo ""
+	echo "You can usually try 'uname -r' to obtain the current kernel version."
+	echo ""
+
+}
+
+is_num() {
+
+	[ "$1" ] && [ -z "${1//[0-9]/}" ]
+
+} # Credits: https://stackoverflow.com/questions/806906/how-do-i-test-if-a-variable-is-a-number-in-bash
+
+myerror() {
+
+	echo "**** Error: $1 Exiting..."
+	exit 1
+
+}
+
+install_options_checks() {
+
+	[ -n "$ramdisk_size" ] || myerror "missing argument '--size'."
+	is_num "$ramdisk_size" || myerror "the ramdisk size must be a positive integer."
+	[ -n "$cache_mode" ] || myerror "missing argument '--cache-mode'."
+	cache_mode="$(echo "$cache_mode" | tr '[:upper:]' '[:lower:]')"
+	if [[ ! "$cache_mode" = w[tab] ]] ; then
+		myerror "cache mode in '--cache-mode parameter' must be one of 'wt', 'wa' or 'wb'."
+	fi
+	if [ -z "$root_device" ] ; then
+		echo " - No root device was specified, we start looking for it in /etc/fstab..."
+		root_line="$(grep -vE '^[ #]+' /etc/fstab | grep -m 1 -oP '^.*?[^\s]+\s+/\s+')"
+		root_first_char="$(echo "$root_line" | grep -o '^.')"
+		case $root_first_char in
+			U)
+				uuid="$(echo "$root_line" | grep -oP '[\w\d]{8}-([\w\d]{4}-){3}[\w\d]{12}')"
+				root_device=/dev/"$(ls 2>/dev/null -l /dev/disk/by-uuid/*"$uuid"* | grep -oE '[^/]+$')"
+				;;
+			L)
+				label="$(echo "$root_line" | grep -oP '=[^\s]+' | tr -d '=')"
+				root_device=/dev/"$(ls 2>/dev/null -l /dev/disk/by-label/*"$label"* | grep -oE '[^/]+$')"
+				;;
+			/)
+				device="$(echo "$root_line" | grep -oP '^[^\s]+')"
+				root_device=/dev/"$(ls 2>/dev/null -l "$device" | grep -oP '[^/]+$')"
+				;;
+			*)
+				myerror "could not find the root device from /etc/fstab. Use the '--root' option."
+				;;
+		esac
+		# TODO this check must be improved
+		if ! echo "$root_device" | grep -P '^/dev/\w{1,4}\d{0,99}$' >/dev/null 2>/dev/null ; then
+			myerror "root_device '$root_device' must be in the form '/dev/xxx' or '/dev/xxxn with n as a positive integer. Use the '--root' option."
+		fi
+		echo " - Root device '$root_device' was found!"
+		echo ' - Is it ok to use it? [yN]'
+		read -r yn
+		if [ ! "$yn" = "y" ] && [ ! "$yn" = "Y" ] ; then
+			myerror "please use the '--root' option."
+		fi
+	fi
+
+}
+
+list_installations () {
+
+	numbers=""
+	echo " - I found this mappings for kernel version '$kernel_version':"
+	for i in $installations ; do
+		number="$(echo "$i" | grep -oP '\d+$')"
+		numbers="$numbers $number"
+		size="$(head -n 1 "$i")"
+		device="$(head -n 2 "$i" | tail -n 1)"
+		cache_mode="$(tail -n 1 "$i")"
+		echo "  [$number] Ramdisk size: $size, Device: $device, Cache mode: $cache_mode"
+	done
+
+}
+
+# checks for current user == root
+whoami | grep -q '^root$' || myerror "sorry, this must be run as root."
+# checks for rapiddisk executables
+rapiddisk_command="$(which 2>/dev/null rapiddisk | head -n 1)"
+if [ -z "$rapiddisk_command" ] ; then
+	myerror "'rapiddisk' command not found."
+fi
+# looks for the OS name
+if grep -q "Ubuntu" /etc/*-release ; then
+	kernel_installed="$(dpkg-query --list | grep -P 'linux-image-(unsigned-)?\d' | grep '^.i'| awk '{ print $2 }'| sed -re 's,linux-image-(unsigned-)?,,')"
+else
+	myerror "operating system not supported."
+fi
+# set the data dir
+if [ -d /etc/rapiddisk-on-boot ] ; then
+	source_dir="/etc/rapiddisk-on-boot"
+else
+	source_dir="$(dirname "$0")"
+fi
+# parsing arguments
+for i in "$@"; do
+	case $i in
+		--kernel=*)
+			kernel_version="${i#*=}"
+			shift # past argument=value
+			;;
+		--uninstall)
+			install_mode=simple_uninstall
+			shift # past argument with no value
+			;;
+		--global-uninstall)
+			if [ -n "$install_mode" ] ; then
+				ihelp
+				myerror "only one betweeen '--install, '--uninstall' and --global-uninstall can be specified."
+			fi
+			install_mode=global_uninstall
+			shift # past argument with no value
+			;;
+		--install)
+			if [ -n "$install_mode" ] ; then
+				ihelp
+				myerror "only one betweeen '--install, '--uninstall' and --global-uninstall can be specified."
+			fi
+			install_mode=simple_install
+			shift # past argument with no value
+			;;
+		--root=*)
+			root_device="${i#*=}"
+			shift # past argument=value
+			;;
+		--size=*)
+			ramdisk_size="${i#*=}"
+			shift # past argument=value
+			;;
+		--cache-mode=*)
+			cache_mode="${i#*=}"
+			shift # past argument=value
+            ;;
+		--force)
+			force=1
+			shift # past argument with no value
+			;;
+		--list)
+			if [ -n "$install_mode" ] ; then
+				ihelp
+				myerror "only one betweeen '--install, '--uninstall' and --global-uninstall can be specified."
+			fi
+			install_mode=list
+			shift # past argument with no value
+			;;
+		--all)
+			all=1
+			shift # past argument with no value
+			;;
+		--no-initramfs)
+			noinitramfs=1
+			shift # past argument with no value
+			;;
+		--skip-kernel-check)
+			skipkernelcheck=1
+			shift # past argument with no value
+			;;
+		--help)
+			ihelp
+			exit 1
+			;;
+		-h)
+			ihelp
+			exit 1
+			;;
+		*)
+			ihelp
+			myerror "unknown argument."
+			;;
+	esac
+done # Credits https://stackoverflow.com/questions/192249/how-do-i-parse-command-line-arguments-in-bash
+
+# the action must always be specified
+if [ -z "$install_mode" ] ; then
+	ihelp
+	myerror "one betweeen '--install, '--uninstall' and '--global-uninstall' must be specified."
+fi
+# --kernel option is mandatory, except when --global-uninstall is specified
+if [ -z "$kernel_version" ] && [ ! "$install_mode" = "global_uninstall" ] ; then
+	ihelp
+	myerror "missing argument '--kernel'."
+fi
+# check if the kernel version specified is installed
+if [ ! "$install_mode" = "global_uninstall" ] ; then
+	for v in $kernel_installed
+	do
+		if [ "$v" = "$kernel_version" ] ; then
+			kernel_found=1
+			break
+		fi
+	done
+	if [ -z "$kernel_found" ] && [ -z "$skipkernelcheck" ] ; then
+		myerror "the kernel version you specified is not installed on the machine."
+	fi
+fi
+# start installation
+# prepare some vars
+config_dir="/etc/rapiddisk-on-boot"
+hooks_dir="/usr/share/initramfs-tools/hooks"
+scripts_dir="/usr/share/initramfs-tools/scripts/init-premount"
+alt_scripts_dir="/usr/share/initramfs-tools/scripts/local-bottom"
+if [ ! -d "$hooks_dir" ] || [ ! -d "$scripts_dir" ] || [ ! -d "$alt_scripts_dir" ] ; then
+	myerror "I can't find any suitable place to write initramfs' scripts."
+fi
+hook_dest="${hooks_dir}/rapiddisk_hook"
+bootscript_dest="${scripts_dir}/rapiddisk_boot"
+subscript_dest_orig="${config_dir}/rapiddisk_sub"
+cleanscript_dest_orig="${alt_scripts_dir}/rapiddisk_clean"
+kernel_version_file="rapiddisk_kernel_${kernel_version}"
+lastindex=$(ls 2>/dev/null "${config_dir:?}/${kernel_version_file}".* | grep -oP '\d+$' | sort -n)
+#	lowerindex="$(echo "$lastindex" | head -1)"
+lastindex="$(echo "$lastindex" | tail -n 1)"
+#	if [ -n "$lowerindex" ] && [ "$lowerindex" -gt 0 ] ; then
+#		lastindex="$((lowerindex - 1))"
+if [ -n "$lastindex" ] ; then
+	lastindex="$((lastindex + 1))"
+	lastindex="$(printf "%03d" $lastindex)"
+else
+	lastindex="$(printf "%03d" 0)"
+fi
+kernel_version_file_dest="${config_dir:?}/${kernel_version_file}.${lastindex:?}"
+# what should we do?
+if [ "$install_mode" = "simple_install" ] ; then
+	# checks for modinfo executable
+	modinfo_command="$(which 2>/dev/null modinfo | head -n 1)"
+	if [ -z "$modinfo_command" ] ; then
+		myerror "'modinfo' command not found."
+	fi
+	# check if rapiddisk modules are installed for chosen kernel
+	if ! $modinfo_command >/dev/null 2>&1 -k "$kernel_version" -n rapiddisk ; then
+		if dkms status -m rapiddisk -k "$kernel_version" | grep -q 'added$' ; then
+#			rapiddisk_version="$(dkms status -m rapiddisk -k "$kernel_version" | grep -oP ',\s+[^:\s]+'|sed 's/, //')"
+#			rapiddisk_version="$(dkms status -m rapiddisk -k "$kernel_version" | grep -oP 'rapiddisk/.*?[,\s]{1}'|sed 's@rapiddisk/@@'| tr -d ',:')"
+			rapiddisk_version="$(rapiddisk -v | grep -oP '\d+\.\d+\.\d+')"
+			if dkms 2>/dev/null install -m rapiddisk -v "$rapiddisk_version" -k "$kernel_version" ; then
+				missing_modules=0
+			fi
+		fi
+		if [ -z "$missing_modules" ] ; then
+			myerror "no rapiddisk modules found for chosen kernel."
+		fi
+	fi
+	# now we can perform some parameter checks which would be senseless to do earlier
+	install_options_checks
+	if [ ! -x "${hook_dest}" -o -n "${force}" ] ; then
+		echo " - Copying ${source_dir}/ubuntu/rapiddisk_hook to ${hook_dest}..."
+		if ! cp -f "${source_dir}/ubuntu/rapiddisk_hook" "${hook_dest}" ; then
+			myerror "could not copy rapiddisk_hook to ${hook_dest}."
+		fi
+		chmod +x "${hook_dest}" 2>/dev/null
+	fi
+	if [ ! -x "${bootscript_dest}" -o -n "${force}" ] ; then
+		echo " - Copying ${source_dir}/ubuntu/rapiddisk_boot to ${bootscript_dest}..."
+		if ! cp -f "${source_dir}/ubuntu/rapiddisk_boot" "${bootscript_dest}" ; then
+			myerror "could not copy rapiddisk_boot to ${bootscript_dest}."
+		fi
+		chmod +x "${bootscript_dest}" 2>/dev/null
+	fi
+#	if [ ! -f "${subscript_dest_orig}" -o -n "${force}" ] ; then
+#		echo " - Copying ${source_dir}/ubuntu/rapiddisk_sub to ${subscript_dest_orig}..."
+#		if ! cp -f "${source_dir}/ubuntu/rapiddisk_sub" "${subscript_dest_orig}"; then
+#			myerror "could not copy rapiddisk_sub to ${subscript_dest_orig}."
+#		fi
+#		chmod -x "${subscript_dest_orig}" 2>/dev/null
+#	fi
+	if [ ! -x "${cleanscript_dest_orig}" -o -n "${force}" ] ; then
+		echo " - Copying ${source_dir}/ubuntu/rapiddisk_clean to ${cleanscript_dest_orig}..."
+		if ! cp -f "${source_dir}/ubuntu/rapiddisk_clean" "${cleanscript_dest_orig}"; then
+			myerror "could not copy rapiddisk_clean to ${cleanscript_dest_orig}."
+		fi
+		chmod +x "${cleanscript_dest_orig}" 2>/dev/null
+	fi
+	echo " - Creating kernel options file..."
+	echo >"${kernel_version_file_dest}" "${ramdisk_size}"
+	echo >>"${kernel_version_file_dest}" "${root_device}"
+	echo >>"${kernel_version_file_dest}" "${cache_mode}"
+	chmod >/dev/null 600 "${kernel_version_file_dest}"
+elif [ "$install_mode" = "list" ] ; then
+	noinitramfs=1
+	installations="$(find "${config_dir:?}" -maxdepth 1 -iname "${kernel_version_file}.*")"
+	if [ -n "$installations" ] ; then
+		list_installations
+	else
+		echo " - No cache mappings present for this kernel"
+	fi
+elif [ "$install_mode" = "simple_uninstall" ] ; then
+	while [ "$n" != "q" ] ; do
+#		installations="$(ls 2>/dev/null ${config_dir:?}/${kernel_version_file}.* | sort -n)"
+		installations="$(find "${config_dir:?}" -maxdepth 1 -iname "${kernel_version_file}.*")"
+		if [ -n "$installations" ] ; then
+			list_installations
+			if [ -n "$all" ] ; then
+				echo " - Removing all mappings..."
+				for n in $numbers ; do
+					rm -f "${config_dir:?}/${kernel_version_file}.$n"
+				done
+				skipinitramfs=false
+			else
+				echo " - Please enter the number of a mapping to be removed (three digits), 'q' when done:"
+				read -r n
+				if is_num "$n" && echo "$numbers" | grep -P '\b'"$n"'\b' >/dev/null ; then
+					skipinitramfs=false
+					rm -f "${config_dir:?}/${kernel_version_file}.$n"
+#					numbers="$(echo $numbers | sed "s/\b$n\b//g")"
+				fi
+			fi
+		else
+			echo " - No (more) cache mappings present for this kernel"
+			break
+		fi
+	done
+	if [ "$skipinitramfs" != "false" ] && [ -z "$noinitramfs" ] ; then
+		noinitramfs=1
+	fi
+elif [ "$install_mode" = "global_uninstall" ] ; then
+	echo " - Global uninstalling for all kernel versions.."
+	echo " - Deleting all files and rebuilding all the initrd files.."
+	rm -f "${config_dir:?}"/rapiddisk_kernel_*
+	rm -f "${hook_dest:?}" 2>/dev/null
+	rm -f "${bootscript_dest:?}" 2>/dev/null
+	rm -f "${subscript_dest_orig:?}" 2>/dev/null
+	rm -f "${cleanscript_dest_orig:?}" 2>/dev/null
+	kernel_version=all
+fi
+# this is needed when an --uninstall is peformed by the apt prerm kernel script
+# we need to skip the kernel version test (skipped using the --skip-kernel-check)
+# and to skip the initramfs creation
+if [ "$install_mode" = "simple_uninstall" ] && [ -n "$skipkernelcheck" ] ; then
+	noinitramfs=1
+fi
+if [ -z "$noinitramfs" ] ; then
+	echo " - Updating initramfs for kernel version ${kernel_version}..."
+	echo ""
+	update-initramfs -u -k "$kernel_version"
+	echo ""
+fi
+#echo " - Done under Ubuntu. A reboot may be required."
+
+exit 0

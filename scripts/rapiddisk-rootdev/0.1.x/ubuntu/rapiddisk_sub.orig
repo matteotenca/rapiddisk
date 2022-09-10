@@ -1,0 +1,43 @@
+#!/bin/sh
+
+. /scripts/functions
+
+FAILUREMSG="rapiddisk: failed."
+log_begin_msg "rapiddisk: starting rapiddisk preparation, ramdisk size: RAMDISKSIZE, boot device: BOOTDEVICE, caching mode: CACHEMODE."
+
+if [ "CACHEMODE" = "wb" ] ; then
+	modprobe -q dm-writecache
+	if [ ! -d /sys/module/dm_writecache ] ; then
+		log_failure_msg "rapiddisk: unable to load dm-writecache module"
+		log_failure_msg "$FAILUREMSG"
+		exit 0;
+	fi
+fi
+modprobe -q rapiddisk
+modprobe -q rapiddisk-cache
+if { [ ! -d /sys/module/rapiddisk ] || [ ! -d /sys/module/rapiddisk_cache ]  ; } ; then
+	log_failure_msg "rapiddisk: unable to load rapiddisk modules"
+	log_failure_msg "$FAILUREMSG"
+	exit 0;
+fi
+rapiddisk >/dev/null 2>&1 -a RAMDISKSIZE
+if ! rapiddisk >/dev/null 2>&1 -m rd0 -b BOOTDEVICE -p CACHEMODE ; then
+	log_failure_msg "rapiddisk: attaching of the ramdisk failed, trying with a workaround"
+	rapiddisk >/dev/null 2>&1 -a 5 || log_warning_msg "rapiddisk: failed to add 5 MB rd1 ramdisk"
+	rapiddisk >/dev/null 2>&1 -d rd0 || log_warning_msg "rapiddisk: failed to delete RAMDISKSIZE MB rd0 ramdisk"
+	rapiddisk >/dev/null 2>&1 -a RAMDISKSIZE || log_warning_msg "rapiddisk: failed to add RAMDISKSIZE MB rd0 ramdisk"
+	rapiddisk >/dev/null 2>&1 -a 5 || log_warning_msg "rapiddisk: failed to add 5 MB rd2 ramdisk"
+	rapiddisk >/dev/null 2>&1 -d rd1 || log_warning_msg "rapiddisk: failed to delete 5 MB rd1 ramdisk"
+	if ! rapiddisk >/dev/null 2>&1 -m rd0 -b BOOTDEVICE -p CACHEMODE ; then
+		rapiddisk >/dev/null 2>&1 -d rd0
+		rapiddisk >/dev/null 2>&1 -d rd1
+		rapiddisk >/dev/null 2>&1 -d rd2
+		log_end_msg "rapiddisk: attaching of the ramdisk failed"
+		exit 0
+	fi
+fi
+result="$(rapiddisk 2>&1 -l)"
+log_success_msg "$result"
+log_end_msg "rapiddisk: RAMDISKSIZE MB ramdisk attached to BOOTDEVICE successfully."
+exit 0
+
