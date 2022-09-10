@@ -52,10 +52,14 @@
 #define ACTION_DISABLE_NVMET_PORT	0xd
 #define ACTION_EXPORT_NVMET		0xe
 #define ACTION_UNEXPORT_NVMET		0xf
+#define ACTION_LOCK			0x10
+#define ACTION_UNLOCK			0x11
+#define ACTION_REVALIDATE_NVMET_SIZE	0x12
 
 #define NAMELEN				0x200
 #define FILEDATA			0x40
 #define BYTES_PER_SECTOR		0x200
+#define PAGE_SIZE			0x1000
 
 #define DISABLED			0
 #define ENABLED				1
@@ -63,9 +67,13 @@
 #define XFER_MODE_TCP			0
 #define XFER_MODE_RDMA			1
 
+#define RD_GET_USAGE			0x0530
+
 typedef struct RD_PROFILE {      /* For RapidDisk device list     */
 	unsigned char device[0xf];
 	unsigned long long size;
+	int lock_status;
+	unsigned long long usage;
 	struct RD_PROFILE *next;
 } RD_PROFILE;
 
@@ -154,6 +162,9 @@ int mem_device_attach(struct RD_PROFILE *, unsigned long long);
 int mem_device_detach(struct RD_PROFILE *, struct RC_PROFILE *, unsigned char *);
 int mem_device_resize(struct RD_PROFILE *, unsigned char *, unsigned long long);
 int mem_device_flush(struct RD_PROFILE *, RC_PROFILE *, unsigned char *);
+int mem_device_lock(struct RD_PROFILE *, unsigned char *, bool);
+int mem_device_lock_status(unsigned char *);
+unsigned long long mem_device_get_usage(unsigned char *);
 int cache_device_map(struct RD_PROFILE *, struct RC_PROFILE *, unsigned char *, unsigned char *, int);
 int cache_device_unmap(struct RC_PROFILE *, unsigned char *);
 int cache_device_stat(struct RC_PROFILE *, unsigned char *);
@@ -171,6 +182,7 @@ int json_nvmet_view_ports(struct NVMET_PORTS *);
 int nvmet_enable_port(unsigned char *, int, int);
 int nvmet_disable_port(int);
 int nvmet_export_volume(struct RD_PROFILE *, RC_PROFILE *, unsigned char *, unsigned char *, int);
+int nvmet_revalidate_size(struct RD_PROFILE *, RC_PROFILE *, unsigned char *);
 int nvmet_unexport_volume(unsigned char *, unsigned char *, int);
 int get_memory_usage(struct MEM_PROFILE *);
 struct VOLUME_PROFILE *search_volumes_targets(void);
