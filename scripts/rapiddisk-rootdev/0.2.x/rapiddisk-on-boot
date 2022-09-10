@@ -148,7 +148,7 @@ for i in "$@"; do
 		--global-uninstall)
 			if [ -n "$install_mode" ] ; then
 				ihelp
-				myerror "only one betweeen '--install, '--uninstall' and --global-uninstall can be specified."
+				myerror "only one betweeen '--install, '--uninstall', '--list' and --global-uninstall can be specified."
 			fi
 			install_mode=global_uninstall
 			shift # past argument with no value
@@ -156,7 +156,7 @@ for i in "$@"; do
 		--install)
 			if [ -n "$install_mode" ] ; then
 				ihelp
-				myerror "only one betweeen '--install, '--uninstall' and --global-uninstall can be specified."
+				myerror "only one betweeen '--install, '--uninstall', '--list' and --global-uninstall can be specified."
 			fi
 			install_mode=simple_install
 			shift # past argument with no value
@@ -180,7 +180,7 @@ for i in "$@"; do
 		--list)
 			if [ -n "$install_mode" ] ; then
 				ihelp
-				myerror "only one betweeen '--install, '--uninstall' and --global-uninstall can be specified."
+				myerror "only one betweeen '--install, '--uninstall', '--list' and --global-uninstall can be specified."
 			fi
 			install_mode=list
 			shift # past argument with no value
@@ -215,10 +215,10 @@ done # Credits https://stackoverflow.com/questions/192249/how-do-i-parse-command
 # the action must always be specified
 if [ -z "$install_mode" ] ; then
 	ihelp
-	myerror "one betweeen '--install, '--uninstall' and '--global-uninstall' must be specified."
+	myerror "one betweeen '--install, '--uninstall', '--list' and '--global-uninstall' must be specified."
 fi
 # --kernel option is mandatory, except when --global-uninstall is specified
-if [ -z "$kernel_version" ] && [ ! "$install_mode" = "global_uninstall" ] ; then
+if [ -z "$kernel_version" ] && [ ! "$install_mode" = "global_uninstall" ] && [ ! "$install_mode" = "list" ] ; then
 	ihelp
 	myerror "missing argument '--kernel'."
 fi
@@ -231,7 +231,7 @@ if [ ! "$install_mode" = "global_uninstall" ] ; then
 			break
 		fi
 	done
-	if [ -z "$kernel_found" ] && [ -z "$skipkernelcheck" ] ; then
+	if [ -z "$kernel_found" ] && [ -z "$skipkernelcheck" ] && [ -n "$kernel_version" ] ; then
 		myerror "the kernel version you specified is not installed on the machine."
 	fi
 fi
@@ -249,12 +249,10 @@ bootscript_dest="${scripts_dir}/rapiddisk_boot"
 subscript_dest_orig="${config_dir}/rapiddisk_sub"
 cleanscript_dest_orig="${alt_scripts_dir}/rapiddisk_clean"
 kernel_version_file="rapiddisk_kernel_${kernel_version}"
-lastindex=$(ls 2>/dev/null "${config_dir:?}/${kernel_version_file}".* | grep -oP '\d+$' | sort -n)
-#	lowerindex="$(echo "$lastindex" | head -1)"
-lastindex="$(echo "$lastindex" | tail -n 1)"
-#	if [ -n "$lowerindex" ] && [ "$lowerindex" -gt 0 ] ; then
-#		lastindex="$((lowerindex - 1))"
+lastindex=$(ls 2>/dev/null "${config_dir:?}/${kernel_version_file}"* | grep -oP '\d+$' | sort -n)
 if [ -n "$lastindex" ] ; then
+	lastindex="$(echo "$lastindex" | tail -n 1)"
+    lastindex="$(echo "$lastindex" | sed -r 's/^0+//g')"
 	lastindex="$((lastindex + 1))"
 	lastindex="$(printf "%03d" $lastindex)"
 else
@@ -313,17 +311,32 @@ if [ "$install_mode" = "simple_install" ] ; then
 		chmod +x "${cleanscript_dest_orig}" 2>/dev/null
 	fi
 	echo " - Creating kernel options file..."
+	echo " - Ramdisk size: ${ramdisk_size}"
+	echo " - Root device: ${root_device}"
+	echo " - Cache mode: ${cache_mode}"
 	echo >"${kernel_version_file_dest}" "${ramdisk_size}"
 	echo >>"${kernel_version_file_dest}" "${root_device}"
 	echo >>"${kernel_version_file_dest}" "${cache_mode}"
 	chmod >/dev/null 600 "${kernel_version_file_dest}"
 elif [ "$install_mode" = "list" ] ; then
 	noinitramfs=1
-	installations="$(find "${config_dir:?}" -maxdepth 1 -iname "${kernel_version_file}.*")"
-	if [ -n "$installations" ] ; then
-		list_installations
-	else
-		echo " - No cache mappings present for this kernel"
+	if [ -z "$kernel_version" ] ; then
+		echo " - Listing mappings for every kernel installed..."
+		for kernel_version in $kernel_installed ; do
+			installations="$(find "${config_dir:?}" -maxdepth 1 -iname "${kernel_version_file}$kernel_version*")"
+			if [ -n "$installations" ] ; then
+        		list_installations
+        	else
+        		echo " - I found no mappings for kernel $kernel_version"
+        	fi
+    	done
+    else
+		installations="$(find "${config_dir:?}" -maxdepth 1 -iname "${kernel_version_file}*")"
+		if [ -n "$installations" ] ; then
+			list_installations
+		else
+			echo " - I found no mappings for kernel $kernel_version."
+		fi
 	fi
 elif [ "$install_mode" = "simple_uninstall" ] ; then
 	while [ "$n" != "q" ] ; do
@@ -340,14 +353,15 @@ elif [ "$install_mode" = "simple_uninstall" ] ; then
 			else
 				echo " - Please enter the number of a mapping to be removed (three digits), 'q' when done:"
 				read -r n
-				if is_num "$n" && echo "$numbers" | grep -P '\b'"$n"'\b' >/dev/null ; then
+				if is_num "$n" && echo "$numbers" | grep -qP '\b'"$n"'\b' ; then
 					skipinitramfs=false
 					rm -f "${config_dir:?}/${kernel_version_file}.$n"
+					echo " - Entry number $n was removed!"
 #					numbers="$(echo $numbers | sed "s/\b$n\b//g")"
 				fi
 			fi
 		else
-			echo " - No (more) cache mappings present for this kernel"
+			echo " - No (more) cache mappings present for kernel $kernel_version."
 			break
 		fi
 	done
