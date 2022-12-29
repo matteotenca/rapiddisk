@@ -252,7 +252,7 @@ kernel_version_file="rapiddisk_kernel_${kernel_version}"
 lastindex=$(ls 2>/dev/null "${config_dir:?}/${kernel_version_file}"* | grep -oP '\d+$' | sort -n)
 if [ -n "$lastindex" ] ; then
 	lastindex="$(echo "$lastindex" | tail -n 1)"
-    lastindex="$(echo "$lastindex" | sed -r 's/^0+//g')"
+  lastindex="$(echo "$lastindex" | sed -r 's/^0+//g')"
 	lastindex="$((lastindex + 1))"
 	lastindex="$(printf "%03d" $lastindex)"
 else
@@ -268,10 +268,9 @@ if [ "$install_mode" = "simple_install" ] ; then
 	fi
 	# check if rapiddisk modules are installed for chosen kernel
 	if ! $modinfo_command >/dev/null 2>&1 -k "$kernel_version" -n rapiddisk ; then
-		if dkms status -m rapiddisk -k "$kernel_version" | grep -q 'added$' ; then
-#			rapiddisk_version="$(dkms status -m rapiddisk -k "$kernel_version" | grep -oP ',\s+[^:\s]+'|sed 's/, //')"
-#			rapiddisk_version="$(dkms status -m rapiddisk -k "$kernel_version" | grep -oP 'rapiddisk/.*?[,\s]{1}'|sed 's@rapiddisk/@@'| tr -d ',:')"
-			rapiddisk_version="$(rapiddisk -v | grep -oP '\d+\.\d+\.\d+')"
+	  rapiddisk_version="$(rapiddisk -v | grep -oP '\d+\.\d+\.\d+')"
+	  is_present="$(dkms status -m rapiddisk/${rapiddisk_version} -k $kernel_version)"
+		if [ -z "$is_present" ] || echo $is_present | grep -qP '(added|built)$' ; then
 			if dkms 2>/dev/null install -m rapiddisk -v "$rapiddisk_version" -k "$kernel_version" ; then
 				missing_modules=0
 			fi
@@ -296,13 +295,6 @@ if [ "$install_mode" = "simple_install" ] ; then
 		fi
 		chmod +x "${bootscript_dest}" 2>/dev/null
 	fi
-#	if [ ! -f "${subscript_dest_orig}" -o -n "${force}" ] ; then
-#		echo " - Copying ${source_dir}/ubuntu/rapiddisk_sub to ${subscript_dest_orig}..."
-#		if ! cp -f "${source_dir}/ubuntu/rapiddisk_sub" "${subscript_dest_orig}"; then
-#			myerror "could not copy rapiddisk_sub to ${subscript_dest_orig}."
-#		fi
-#		chmod -x "${subscript_dest_orig}" 2>/dev/null
-#	fi
 	if [ ! -x "${cleanscript_dest_orig}" -o -n "${force}" ] ; then
 		echo " - Copying ${source_dir}/ubuntu/rapiddisk_clean to ${cleanscript_dest_orig}..."
 		if ! cp -f "${source_dir}/ubuntu/rapiddisk_clean" "${cleanscript_dest_orig}"; then
@@ -317,7 +309,7 @@ if [ "$install_mode" = "simple_install" ] ; then
 	echo >"${kernel_version_file_dest}" "${ramdisk_size}"
 	echo >>"${kernel_version_file_dest}" "${root_device}"
 	echo >>"${kernel_version_file_dest}" "${cache_mode}"
-	chmod >/dev/null 600 "${kernel_version_file_dest}"
+	chmod >/dev/null 644 "${kernel_version_file_dest}"
 elif [ "$install_mode" = "list" ] ; then
 	noinitramfs=1
 	if [ -z "$kernel_version" ] ; then

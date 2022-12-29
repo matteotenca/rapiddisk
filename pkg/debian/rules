@@ -35,8 +35,8 @@ override_dh_auto_install:
 	sed -e "s/DEB_VERSION_UPSTREAM/$(DEB_VERSION_UPSTREAM)/g" debian/rapiddisk.install.in > debian/rapiddisk.install
 
 override_dh_install:
-	install -g root -o root -m 750 -D $(CURDIR)/debian/rapiddisk-on-boot_kernel_prerm $(CURDIR)/debian/rapiddisk-on-boot/etc/kernel/prerm.d/rapiddisk-on-boot
-	install -g root -o root -m 755 -d $(CURDIR)/debian/rapiddisk-on-boot/etc/rapiddisk-on-boot
+	install -g root -o root -m 755 -D $(CURDIR)/debian/rapiddisk-on-boot_kernel_prerm $(CURDIR)/debian/rapiddisk-on-boot/etc/kernel/prerm.d/rapiddisk-on-boot
+	install -g root -o root -m 644 -D -t $(CURDIR)/debian/rapiddisk-on-boot/etc/rapiddisk-on-boot/ubuntu $(CURDIR)/scripts/rapiddisk-rootdev/0.2.x/ubuntu/*
 	dh_install
 
 override_dh_installsystemd:
@@ -48,11 +48,6 @@ override_dh_dkms:
 	dh_dkms -V $(DEB_VERSION_UPSTREAM)
 
 override_dh_dwz:
-
-override_dh_fixperms:
-	dh_fixperms
-	find $(CURDIR)/debian/rapiddisk-on-boot/etc/rapiddisk-on-boot/ubuntu -exec chmod 640 {} \; -type f
-	chmod 750 $(CURDIR)/debian/rapiddisk-on-boot/etc/rapiddisk-on-boot/ubuntu
 
 %:
 	dh ${@} --with dkms
